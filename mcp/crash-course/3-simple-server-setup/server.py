@@ -1,5 +1,7 @@
 from mcp.server.fastmcp import FastMCP
 from dotenv import load_dotenv
+import os
+from typing import Literal
 
 load_dotenv("../.env")
 
@@ -20,12 +22,10 @@ def add(a: int, b: int) -> int:
 
 # Run the server
 if __name__ == "__main__":
-    transport = "stdio"
-    if transport == "stdio":
-        print("Running server with stdio transport")
-        mcp.run(transport="stdio")
-    elif transport == "sse":
-        print("Running server with SSE transport")
-        mcp.run(transport="sse")
+    transport_env = os.getenv("TRANSPORT", "stdio")
+    trs: Literal["stdio", "sse"]
+    if transport_env == "sse":
+        trs = "sse"
     else:
-        raise ValueError(f"Unknown transport: {transport}")
+        trs = "stdio"
+    mcp.run(trs)
