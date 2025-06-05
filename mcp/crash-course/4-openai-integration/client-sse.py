@@ -1,15 +1,13 @@
 import asyncio
 import json
 from contextlib import AsyncExitStack
-from functools import total_ordering
 from typing import Any, Dict, List, Optional
 
 import nest_asyncio
 from dotenv import load_dotenv
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
-from openai import AsyncOpenAI
+from mcp import ClientSession
 from mcp.client.sse import sse_client
+from openai import AsyncOpenAI
 
 # Apply nest_asyncio to allow nested event loops (needed for Jupyter/IPython)
 nest_asyncio.apply()
@@ -19,7 +17,7 @@ load_dotenv("../.env")
 
 
 class MCPOpenAIClient:
-    """Client for interacting with OpenAI models using MCP tools."""
+    """Client for interacting with OpenAI models using MCP tools via SSE."""
 
     def __init__(self, model: str = "gpt-4o"):
         """Initialize the OpenAI MCP client.
@@ -32,42 +30,21 @@ class MCPOpenAIClient:
         self.exit_stack = AsyncExitStack()
         self.openai_client = AsyncOpenAI()
         self.model = model
-        self.stdio: Optional[Any] = None
-        self.write: Optional[Any] = None
 
-    async def connect_to_server_sse(self):
-        """Connect to an MCP server using SSE transport."""
-        # Connect to the server using SSE
-        async with sse_client("http://localhost:8050/sse") as (read_stream, write_stream):
-            async with ClientSession(read_stream, write_stream) as session:
-                # Initialize the connection
-                await self.session.initialize()
-
-                # List available tools
-                tools_result = await self.session.list_tools()
-                print("\nConnected to server with tools:")
-                for tool in tools_result.tools:
-                    print(f"  - {tool.name}: {tool.description}")
-
-    async def connect_to_server(self, server_script_path: str = "server.py"):
-        """Connect to an MCP server.
+    async def connect_to_server(self, sse_url: str = "http://localhost:8050/sse"):
+        """Connect to an MCP server using SSE transport.
 
         Args:
-            server_script_path: Path to the server script.
+            sse_url: URL of the SSE endpoint.
         """
-        # Server configuration
-        server_params = StdioServerParameters(
-            command="python",
-            args=[server_script_path],
+        # Connect to the server using SSE
+        transport = await self.exit_stack.enter_async_context(
+            sse_client(sse_url)
         )
+        read_stream, write_stream = transport
 
-        # Connect to the server
-        stdio_transport = await self.exit_stack.enter_async_context(
-            stdio_client(server_params)
-        )
-        self.stdio, self.write = stdio_transport
         self.session = await self.exit_stack.enter_async_context(
-            ClientSession(self.stdio, self.write)
+            ClientSession(read_stream, write_stream)
         )
 
         # Initialize the connection
@@ -85,6 +62,9 @@ class MCPOpenAIClient:
         Returns:
             A list of tools in OpenAI format.
         """
+        if not self.session:
+            raise Exception("Not connected to MCP server")
+
         tools_result = await self.session.list_tools()
         return [
             {
@@ -107,6 +87,9 @@ class MCPOpenAIClient:
         Returns:
             The response from OpenAI.
         """
+        if not self.session:
+            raise Exception("Not connected to MCP server")
+
         # Get available tools
         tools = await self.get_mcp_tools()
 
@@ -167,14 +150,28 @@ class MCPOpenAIClient:
 async def main():
     """Main entry point for the client."""
     client = MCPOpenAIClient()
-    await client.connect_to_server("server.py")
 
-    # Example: Ask about company vacation policy
-    query = "What is our company's vacation policy?"
-    print(f"\nQuery: {query}")
+    try:
+        # Connect to the remote SSE server
+        await client.connect_to_server("http://localhost:8050/sse")
 
-    response = await client.process_query(query)
-    print(f"\nResponse: {response}")
+        # Example queries
+        queries = [
+            "What is our company's vacation policy?",
+            "Tell me about the knowledge base",
+            "What information do you have access to?"
+        ]
+
+        for query in queries:
+            print(f"\n{'=' * 50}")
+            print(f"Query: {query}")
+            print(f"{'=' * 50}")
+
+            response = await client.process_query(query)
+            print(f"\nResponse: {response}")
+
+    finally:
+        await client.cleanup()
 
 
 if __name__ == "__main__":
